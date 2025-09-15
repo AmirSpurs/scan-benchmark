@@ -41,12 +41,11 @@ int main(int argc, char *argv[])
     assert(argc == 2);
     int size;
     sscanf(argv[1], "%d", &size);
-    srand((unsigned int)time(NULL));
+    srand(time(NULL));
     double total = 0.0;
 
     for (int i = 0; i < ITERATION; i++)
     {
-
         int *data = generateData(size);
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
