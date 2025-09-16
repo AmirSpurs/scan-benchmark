@@ -23,16 +23,15 @@ int *generateData(int size)
     return ptr;
 }
 
-int *scan(int *data, int size)
+void scan(int *data, int *scanned, int size)
 {
     int acc = 0;
-    int *scanned = (int *)malloc(size * sizeof(int));
     for (int i = 0; i < size; i++)
     {
         acc = data[i] + acc;
         scanned[i] = acc;
     }
-    return scanned;
+    return ;
 }
 
 int main(int argc, char *argv[])
@@ -43,20 +42,22 @@ int main(int argc, char *argv[])
     sscanf(argv[1], "%d", &size);
     srand(time(NULL));
     double total = 0.0;
+    int *data = generateData(size);
 
     for (int i = 0; i < ITERATION; i++)
     {
-        int *data = generateData(size);
+        int *scanned = (int *)malloc(size * sizeof(int));
+        
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
-        int *res = scan(data, size);
+        scan(data, scanned , size);
         clock_gettime(CLOCK_MONOTONIC, &end);
 
         double elapsed = (end.tv_sec - start.tv_sec) * 1e6 + (end.tv_nsec - start.tv_nsec) / 1e3;
         total += elapsed;
-        free(data);
-        free(res);
+        free(scanned);
     }
+    free(data);
     double avg = total / ITERATION;
     printf("%f\n", avg);
 }
