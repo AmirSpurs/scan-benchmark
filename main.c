@@ -8,8 +8,7 @@
 #include <assert.h>
 
 #define BLOCK_SIZE (1024 * 4)
-// #define BLOCK_SIZE 2
-#define THREAD_NUMBER 1
+#define THREAD_NUMBER 8
 
 #define SIGN_CHANCE 25
 #define MAX_VALUE 10000
@@ -59,7 +58,6 @@ void *scan_worker(void *arg)
 {
     Data *data = (Data *)arg;
 
-    // printf("Thread is running.\n");
     bool seq = true;
     while (1)
     {
@@ -118,7 +116,7 @@ void *scan_worker(void *arg)
                 }
                 else
                 {
-                    sched_yield();
+                    // sched_yield();
                 }
             }
             data->descriptors[block_idx].prefix = aggregate + prefix;
@@ -160,12 +158,18 @@ int main(int argc, char *argv[])
     for (int i = 0; i < ITERATION; i++)
     {
 
-        // number of blocks
         int block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
         Descriptor *descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
+        for (int i = 0; i < block_number; ++i)
+        {
+            atomic_init(&descriptor[i].flag, 0);
+            descriptor[i].aggregate = 0;
+            descriptor[i].prefix = 0;
+        }
 
         Data *data = (Data *)malloc(sizeof(Data));
+
         atomic_init(&data->work_index, 0);
         int *output = (int *)malloc(size * sizeof(int));
         data->input = input;
@@ -173,12 +177,6 @@ int main(int argc, char *argv[])
         data->size = size;
         data->block_count = block_number;
         data->descriptors = descriptor;
-        for (int i = 0; i < block_number; ++i)
-        {
-            atomic_init(&descriptor[i].flag, 0);
-            descriptor[i].aggregate = 0;
-            descriptor[i].prefix = 0;
-        }
 
         struct timespec start_parallel, end_paralell;
         clock_gettime(CLOCK_MONOTONIC, &start_parallel);
@@ -198,48 +196,31 @@ int main(int argc, char *argv[])
         }
 
         clock_gettime(CLOCK_MONOTONIC, &end_paralell);
+
         free(descriptor);
         free(output);
         free(data);
 
         double elapsed = (end_paralell.tv_sec - start_parallel.tv_sec) * 1e6 + (end_paralell.tv_nsec - start_parallel.tv_nsec) / 1e3;
         total += elapsed;
-        // printf("%f\n", elapsed);
     }
+
     double avg_parallel = total / ITERATION;
     total = 0.0;
     for (int i = 0; i < ITERATION; i++)
     {
         int *output_seq = (int *)malloc(size * sizeof(int));
-
         struct timespec start_seq, end_seq;
+
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
         scan_seq(input, output_seq, size, 0);
         clock_gettime(CLOCK_MONOTONIC, &end_seq);
+
         double elapsed = (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
         total += elapsed;
         free(output_seq);
-        // printf("%f\n", elapsed);
     }
     double avg_seq = total / ITERATION;
     printf("%f %f\n", avg_parallel, avg_seq);
     return 0;
 }
-
-// bool test = true;
-// for (int i = 0; i < size; i++)
-// {
-//     if (output_seq[i] != data->output[i])
-//     {
-//         test = false;
-//         break;
-//     }
-// }
-// if (test)
-// {
-//     printf("pass\n");
-// }
-// else
-// {
-//     printf("failed\n");
-// }
