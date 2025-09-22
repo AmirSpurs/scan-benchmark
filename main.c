@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <string.h>
 
 #define BLOCK_SIZE (1024 * 4)
 #define THREAD_NUMBER 8
@@ -13,7 +14,7 @@
 #define SIGN_CHANCE 25
 #define MAX_VALUE 10000
 
-#define ITERATION 30
+#define ITERATION 10
 
 typedef struct
 {
@@ -128,6 +129,26 @@ void *scan_worker(void *arg)
     pthread_exit(NULL);
 }
 
+void *roofline_worker(void *arg)
+{
+    Data *data = (Data *)arg;
+
+    while (1)
+    {
+        int block_idx = atomic_fetch_add_explicit(&data->work_index, 1, memory_order_relaxed);
+        if (block_idx >= data->block_count)
+            pthread_exit(NULL);
+
+        int start = block_idx * BLOCK_SIZE;
+        int len = BLOCK_SIZE;
+        if (data->size - start < len)
+            len = data->size - start;
+        memcpy(&data->output[start], &data->input[start], len * sizeof(int));
+    }
+
+    pthread_exit(NULL);
+}
+
 int *generateData(int size)
 {
     int *ptr = (int *)malloc(size * sizeof(int));
@@ -148,9 +169,8 @@ bool verify(int *output_paralell, int *output_seq, int size)
     {
         if (output_seq[i] != output_paralell[i])
             return false;
-
     }
-    return true ;
+    return true;
 }
 
 int main(int argc, char *argv[])
@@ -164,10 +184,25 @@ int main(int argc, char *argv[])
 
     int *input = (int *)malloc(size * sizeof(int));
     input = generateData(size);
+    double total_parallel = 0.0;
+    double total_seq = 0.0;
+    double total_roofline = 0.0;
+    double total_roofline_seq = 0.0;
     int *output_paralell = (int *)malloc(size * sizeof(int));
-    double total = 0.0;
+    int *output_seq = (int *)malloc(size * sizeof(int));
+    int *output_roofline = (int *)malloc(size * sizeof(int));
+    int *output_roofline_seq = (int *)malloc(size * sizeof(int));
 
-    for (int i = 0; i < ITERATION; i++)
+    // pre touch
+    for (int i = 0; i < size; i++)
+    {
+        output_paralell[i] = 0;
+        output_seq[i] = 0;
+        output_roofline[i] = 0;
+        output_roofline_seq[i] = 0;
+    }
+
+    for (int j = 0; j < ITERATION; j++)
     {
 
         struct timespec start_parallel, end_paralell;
@@ -205,35 +240,91 @@ int main(int argc, char *argv[])
             pthread_join(threads[i], NULL);
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &end_paralell);
-
         free(descriptor);
         free(data);
 
-        double elapsed = (end_paralell.tv_sec - start_parallel.tv_sec) * 1e6 + (end_paralell.tv_nsec - start_parallel.tv_nsec) / 1e3;
-        total += elapsed;
-    }
+        clock_gettime(CLOCK_MONOTONIC, &end_paralell);
 
-    double avg_parallel = total / ITERATION;
-    total = 0.0;
-    int *output_seq = (int *)malloc(size * sizeof(int));
+        double elapsed_parallel = (end_paralell.tv_sec - start_parallel.tv_sec) * 1e6 + (end_paralell.tv_nsec - start_parallel.tv_nsec) / 1e3;
+        total_parallel += elapsed_parallel;
 
-    for (int i = 0; i < ITERATION; i++)
-    {
+        // seq
         struct timespec start_seq, end_seq;
-
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
         scan_seq(input, output_seq, size, 0);
         clock_gettime(CLOCK_MONOTONIC, &end_seq);
 
-        double elapsed = (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
-        total += elapsed;
+        double elapsed_seq = (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
+        total_seq += elapsed_seq;
+        // validation
+        assert(verify(output_paralell, output_seq, size));
+
+        struct timespec start_roofline, end_roofline;
+        clock_gettime(CLOCK_MONOTONIC, &start_roofline);
+
+        block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        data = (Data *)malloc(sizeof(Data));
+        data->input = input;
+        data->output = output_roofline;
+
+        descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
+        for (int i = 0; i < block_number; ++i)
+        {
+            atomic_init(&descriptor[i].flag, 0);
+            descriptor[i].aggregate = 0;
+            descriptor[i].prefix = 0;
+        }
+
+        atomic_init(&data->work_index, 0);
+        data->size = size;
+        data->block_count = block_number;
+        data->descriptors = descriptor;
+
+        for (int i = 0; i < THREAD_NUMBER; i++)
+        {
+            if (pthread_create(&threads[i], NULL, roofline_worker, (void *)data) != 0)
+            {
+                printf("Error creating thread %d\n", i);
+                return 1;
+            }
+        }
+
+        for (int i = 0; i < THREAD_NUMBER; i++)
+        {
+            pthread_join(threads[i], NULL);
+        }
+
+        free(descriptor);
+        free(data);
+
+        clock_gettime(CLOCK_MONOTONIC, &end_roofline);
+        assert(verify(output_roofline, input, size));
+
+        double elapsed_roofline = (end_roofline.tv_sec - start_roofline.tv_sec) * 1e6 + (end_roofline.tv_nsec - start_roofline.tv_nsec) / 1e3;
+        total_roofline += elapsed_roofline;
+
+        struct timespec start_roofline_seq, end_roofline_seq;
+        clock_gettime(CLOCK_MONOTONIC, &start_roofline_seq);
+
+        memcpy(output_roofline_seq, input, size * sizeof(int));
+
+        clock_gettime(CLOCK_MONOTONIC, &end_roofline_seq);
+        assert(verify(output_roofline_seq, input, size));
+
+        double elapsed_roofline_seq = (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6 + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
+        total_roofline_seq += elapsed_roofline_seq;
     }
-    double avg_seq = total / ITERATION;
-    printf("%f %f\n", avg_parallel, avg_seq);
-    // validation
-    assert(verify(output_paralell, output_seq, size));
+
+    double avg_seq = total_seq / ITERATION;
+    double avg_parallel = total_parallel / ITERATION;
+    double avg_roofline = total_roofline / ITERATION;
+    double avg_roofline_seq = total_roofline_seq / ITERATION;
     free(output_paralell);
     free(output_seq);
+    free(output_roofline);
+    free(output_roofline_seq);
+
+    printf("%f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq);
+
     return 0;
 }
