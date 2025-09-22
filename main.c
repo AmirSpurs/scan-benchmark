@@ -142,6 +142,17 @@ int *generateData(int size)
     return ptr;
 }
 
+bool verify(int *output_paralell, int *output_seq, int size)
+{
+    for (int i = 0; i < size; i++)
+    {
+        if (output_seq[i] != output_paralell[i])
+            return false;
+
+    }
+    return true ;
+}
+
 int main(int argc, char *argv[])
 {
     assert(argc == 2);
@@ -153,12 +164,19 @@ int main(int argc, char *argv[])
 
     int *input = (int *)malloc(size * sizeof(int));
     input = generateData(size);
-
+    int *output_paralell = (int *)malloc(size * sizeof(int));
     double total = 0.0;
+
     for (int i = 0; i < ITERATION; i++)
     {
 
+        struct timespec start_parallel, end_paralell;
+        clock_gettime(CLOCK_MONOTONIC, &start_parallel);
+
         int block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        Data *data = (Data *)malloc(sizeof(Data));
+        data->input = input;
+        data->output = output_paralell;
 
         Descriptor *descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
         for (int i = 0; i < block_number; ++i)
@@ -168,18 +186,10 @@ int main(int argc, char *argv[])
             descriptor[i].prefix = 0;
         }
 
-        Data *data = (Data *)malloc(sizeof(Data));
-
         atomic_init(&data->work_index, 0);
-        int *output = (int *)malloc(size * sizeof(int));
-        data->input = input;
-        data->output = output;
         data->size = size;
         data->block_count = block_number;
         data->descriptors = descriptor;
-
-        struct timespec start_parallel, end_paralell;
-        clock_gettime(CLOCK_MONOTONIC, &start_parallel);
 
         for (int i = 0; i < THREAD_NUMBER; i++)
         {
@@ -198,7 +208,6 @@ int main(int argc, char *argv[])
         clock_gettime(CLOCK_MONOTONIC, &end_paralell);
 
         free(descriptor);
-        free(output);
         free(data);
 
         double elapsed = (end_paralell.tv_sec - start_parallel.tv_sec) * 1e6 + (end_paralell.tv_nsec - start_parallel.tv_nsec) / 1e3;
@@ -207,9 +216,10 @@ int main(int argc, char *argv[])
 
     double avg_parallel = total / ITERATION;
     total = 0.0;
+    int *output_seq = (int *)malloc(size * sizeof(int));
+
     for (int i = 0; i < ITERATION; i++)
     {
-        int *output_seq = (int *)malloc(size * sizeof(int));
         struct timespec start_seq, end_seq;
 
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
@@ -218,9 +228,12 @@ int main(int argc, char *argv[])
 
         double elapsed = (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
         total += elapsed;
-        free(output_seq);
     }
     double avg_seq = total / ITERATION;
     printf("%f %f\n", avg_parallel, avg_seq);
+    // validation
+    assert(verify(output_paralell, output_seq, size));
+    free(output_paralell);
+    free(output_seq);
     return 0;
 }
