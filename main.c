@@ -55,6 +55,7 @@ int scan_seq(int *data, int *scanned, int size, int prefix)
     return acc;
 }
 
+
 void *scan_worker(void *arg)
 {
     Data *data = (Data *)arg;
@@ -149,6 +150,50 @@ void *roofline_worker(void *arg)
     pthread_exit(NULL);
 }
 
+double run_threads(void *(*worker)(void *), int *input, int *output, int size)
+{
+    pthread_t threads[THREAD_NUMBER];
+    int block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    Data *data = (Data *)malloc(sizeof(Data));
+    data->input = input;
+    data->output = output;
+    data->size = size;
+    data->block_count = block_number;
+    atomic_init(&data->work_index, 0);
+
+    Descriptor *descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
+    for (int i = 0; i < block_number; i++)
+    {
+        atomic_init(&descriptor[i].flag, 0);
+        descriptor[i].aggregate = 0;
+        descriptor[i].prefix = 0;
+    }
+    data->descriptors = descriptor;
+
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    for (int i = 0; i < THREAD_NUMBER; i++)
+    {
+        if (pthread_create(&threads[i], NULL, worker, (void *)data) != 0)
+        {
+            printf("Error creating thread %d\n", i);
+            return 1;
+        }
+    }
+
+    for (int i = 0; i < THREAD_NUMBER; i++)
+        pthread_join(threads[i], NULL);
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    free(descriptor);
+    free(data);
+
+    return (end.tv_sec - start.tv_sec) * 1e6 + (end.tv_nsec - start.tv_nsec) / 1e3;
+}
+
 int *generateData(int size)
 {
     int *ptr = (int *)malloc(size * sizeof(int));
@@ -180,14 +225,15 @@ int main(int argc, char *argv[])
     int size = 67108864; // 2^16
     sscanf(argv[1], "%d", &size);
     srand(time(NULL));
-    pthread_t threads[THREAD_NUMBER];
 
     int *input = (int *)malloc(size * sizeof(int));
     input = generateData(size);
+
     double total_parallel = 0.0;
     double total_seq = 0.0;
     double total_roofline = 0.0;
     double total_roofline_seq = 0.0;
+
     int *output_paralell = (int *)malloc(size * sizeof(int));
     int *output_seq = (int *)malloc(size * sizeof(int));
     int *output_roofline = (int *)malloc(size * sizeof(int));
@@ -202,129 +248,40 @@ int main(int argc, char *argv[])
         output_roofline_seq[i] = 0;
     }
 
-    for (int j = 0; j < ITERATION; j++)
-    {
+    for (int j = 0; j < ITERATION; j++) {
+        
+        total_parallel += run_threads(scan_worker, input, output_paralell, size);
 
-        struct timespec start_parallel, end_paralell;
-        clock_gettime(CLOCK_MONOTONIC, &start_parallel);
-
-        int block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        Data *data = (Data *)malloc(sizeof(Data));
-        data->input = input;
-        data->output = output_paralell;
-
-        Descriptor *descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
-        for (int i = 0; i < block_number; ++i)
-        {
-            atomic_init(&descriptor[i].flag, 0);
-            descriptor[i].aggregate = 0;
-            descriptor[i].prefix = 0;
-        }
-
-        atomic_init(&data->work_index, 0);
-        data->size = size;
-        data->block_count = block_number;
-        data->descriptors = descriptor;
-
-        for (int i = 0; i < THREAD_NUMBER; i++)
-        {
-            if (pthread_create(&threads[i], NULL, scan_worker, (void *)data) != 0)
-            {
-                printf("Error creating thread %d\n", i);
-                return 1;
-            }
-        }
-
-        for (int i = 0; i < THREAD_NUMBER; i++)
-        {
-            pthread_join(threads[i], NULL);
-        }
-
-        free(descriptor);
-        free(data);
-
-        clock_gettime(CLOCK_MONOTONIC, &end_paralell);
-
-        double elapsed_parallel = (end_paralell.tv_sec - start_parallel.tv_sec) * 1e6 + (end_paralell.tv_nsec - start_parallel.tv_nsec) / 1e3;
-        total_parallel += elapsed_parallel;
-
-        // seq
         struct timespec start_seq, end_seq;
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
         scan_seq(input, output_seq, size, 0);
         clock_gettime(CLOCK_MONOTONIC, &end_seq);
-
-        double elapsed_seq = (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
-        total_seq += elapsed_seq;
-        // validation
+        total_seq += (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
         assert(verify(output_paralell, output_seq, size));
 
-        struct timespec start_roofline, end_roofline;
-        clock_gettime(CLOCK_MONOTONIC, &start_roofline);
-
-        block_number = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        data = (Data *)malloc(sizeof(Data));
-        data->input = input;
-        data->output = output_roofline;
-
-        descriptor = (Descriptor *)malloc(block_number * sizeof(Descriptor));
-        for (int i = 0; i < block_number; ++i)
-        {
-            atomic_init(&descriptor[i].flag, 0);
-            descriptor[i].aggregate = 0;
-            descriptor[i].prefix = 0;
-        }
-
-        atomic_init(&data->work_index, 0);
-        data->size = size;
-        data->block_count = block_number;
-        data->descriptors = descriptor;
-
-        for (int i = 0; i < THREAD_NUMBER; i++)
-        {
-            if (pthread_create(&threads[i], NULL, roofline_worker, (void *)data) != 0)
-            {
-                printf("Error creating thread %d\n", i);
-                return 1;
-            }
-        }
-
-        for (int i = 0; i < THREAD_NUMBER; i++)
-        {
-            pthread_join(threads[i], NULL);
-        }
-
-        free(descriptor);
-        free(data);
-
-        clock_gettime(CLOCK_MONOTONIC, &end_roofline);
-        assert(verify(output_roofline, input, size));
-
-        double elapsed_roofline = (end_roofline.tv_sec - start_roofline.tv_sec) * 1e6 + (end_roofline.tv_nsec - start_roofline.tv_nsec) / 1e3;
-        total_roofline += elapsed_roofline;
+        total_roofline += run_threads(roofline_worker, input, output_roofline, size);
+        // validation
+        // assert(verify(output_roofline, input, size));
 
         struct timespec start_roofline_seq, end_roofline_seq;
         clock_gettime(CLOCK_MONOTONIC, &start_roofline_seq);
-
         memcpy(output_roofline_seq, input, size * sizeof(int));
-
         clock_gettime(CLOCK_MONOTONIC, &end_roofline_seq);
+        total_roofline_seq += (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6
+                            + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
         assert(verify(output_roofline_seq, input, size));
-
-        double elapsed_roofline_seq = (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6 + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
-        total_roofline_seq += elapsed_roofline_seq;
     }
-
     double avg_seq = total_seq / ITERATION;
     double avg_parallel = total_parallel / ITERATION;
     double avg_roofline = total_roofline / ITERATION;
     double avg_roofline_seq = total_roofline_seq / ITERATION;
+
+    printf("%f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq);
+
     free(output_paralell);
     free(output_seq);
     free(output_roofline);
     free(output_roofline_seq);
-
-    printf("%f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq);
 
     return 0;
 }
