@@ -186,8 +186,6 @@ double run_threads(void *(*worker)(void *), int *input, int *output, int size)
     for (int i = 0; i < THREAD_NUMBER; i++)
         pthread_join(threads[i], NULL);
 
-
-
     free(descriptor);
     free(data);
 
