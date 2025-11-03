@@ -16,7 +16,7 @@
 #define SIGN_CHANCE 25
 #define MAX_VALUE 10000
 
-#define ITERATION 50
+#define ITERATION 500
 
 typedef struct
 {
@@ -123,13 +123,12 @@ void *scan_worker(void *arg)
                 else if (flag == 1)
                 {
                     prefix = prefix + data->descriptors[lb].aggregate;
-                 
+
                     lb = lb - 1;
                 }
                 // else {
                 //     sched_yield();
                 // }
-
             }
             data->descriptors[block_idx].prefix = aggregate + prefix;
             atomic_store_explicit(&data->descriptors[block_idx].flag, 2, memory_order_release);
@@ -202,7 +201,6 @@ double run_threads(void *(*worker)(void *), int *input, int *output, int size)
 
     clock_gettime(CLOCK_MONOTONIC, &end);
 
-
     return (end.tv_sec - start.tv_sec) * 1e6 + (end.tv_nsec - start.tv_nsec) / 1e3;
 }
 
@@ -234,7 +232,7 @@ int main(int argc, char *argv[])
 {
     assert(argc == 2);
 
-    int size ;
+    int size;
     sscanf(argv[1], "%d", &size);
     srand(time(NULL));
 
@@ -246,12 +244,14 @@ int main(int argc, char *argv[])
     double total_roofline = 0.0;
     double total_roofline_seq = 0.0;
     double total_fut_chained_scan = 0.0;
+    double total_old_fut_scan = 0.0;
 
     int *output_paralell = (int *)malloc(size * sizeof(int));
     int *output_seq = (int *)malloc(size * sizeof(int));
     int *output_roofline = (int *)malloc(size * sizeof(int));
     int *output_roofline_seq = (int *)malloc(size * sizeof(int));
     int *output_fut_chained_scan = (int *)malloc(size * sizeof(int));
+    int *output_old_fut_scan = (int *)malloc(size * sizeof(int));
 
     // pre touch
     for (int i = 0; i < size; i++)
@@ -261,12 +261,16 @@ int main(int argc, char *argv[])
         output_roofline[i] = 0;
         output_roofline_seq[i] = 0;
         output_fut_chained_scan[i] = 0;
+        output_old_fut_scan[i] = 0;
     }
-    
+
     struct futhark_context_config *cfg = futhark_context_config_new();
 
     struct futhark_context *ctx = futhark_context_new(cfg);
 
+    struct futhark_old_context_config *old_cfg = futhark_old_context_config_new();
+
+    struct futhark_old_context *old_ctx = futhark_old_context_new(old_cfg);
 
     for (int j = 0; j < ITERATION; j++)
     {
@@ -279,42 +283,58 @@ int main(int argc, char *argv[])
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
         scan_seq(input, output_seq, size, 0);
         clock_gettime(CLOCK_MONOTONIC, &end_seq);
-        
+
         if (j > 0)
             total_seq += (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
 
         // validation for chained scan
         assert(verify(output_paralell, output_seq, size));
 
-        
-    
         struct futhark_i32_1d *input_fut_chained_scan_fut = futhark_new_i32_1d(ctx, input, size);
 
-        struct futhark_i32_1d *output_fut_chained_scan_fut ;
-        
+        struct futhark_i32_1d *output_fut_chained_scan_fut;
+
         struct timespec start_fut_chained_scan, end_fut_chained_scan;
-        
-        
+
         clock_gettime(CLOCK_MONOTONIC, &start_fut_chained_scan);
         futhark_entry_main(ctx, &output_fut_chained_scan_fut, input_fut_chained_scan_fut);
+        futhark_context_sync(ctx);
         clock_gettime(CLOCK_MONOTONIC, &end_fut_chained_scan);
 
-        futhark_context_sync(ctx);
-        
+
         if (j > 0)
             total_fut_chained_scan += (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3;
-        
-        // printf("Futhark chained scan done\n");
-        // printf("%f\n", (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3);
-       
+
+
         futhark_values_i32_1d(ctx, output_fut_chained_scan_fut, output_fut_chained_scan);
         assert(verify(output_fut_chained_scan, output_seq, size));
-        
-        
+
         futhark_free_i32_1d(ctx, input_fut_chained_scan_fut);
         futhark_free_i32_1d(ctx, output_fut_chained_scan_fut);
 
+        struct futhark_old_i32_1d *input_old_fut_scan_fut = futhark_old_new_i32_1d(old_ctx, input, size);
 
+        struct futhark_old_i32_1d *output_old_fut_scan_fut;
+
+        struct timespec start_old_fut_scan, end_old_fut_scan;
+
+        clock_gettime(CLOCK_MONOTONIC, &start_old_fut_scan);
+        futhark_old_entry_main_old_scan(old_ctx, &output_old_fut_scan_fut, input_old_fut_scan_fut);
+        futhark_old_context_sync(old_ctx);
+        clock_gettime(CLOCK_MONOTONIC, &end_old_fut_scan);
+
+
+        if (j > 0)
+            total_old_fut_scan += (end_old_fut_scan.tv_sec - start_old_fut_scan.tv_sec) * 1e6 + (end_old_fut_scan.tv_nsec - start_old_fut_scan.tv_nsec) / 1e3;
+
+        // printf("Futhark chained scan done\n");
+        // printf("%f\n", (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3);
+
+        futhark_old_values_i32_1d(old_ctx, output_old_fut_scan_fut, output_old_fut_scan);
+        assert(verify(output_old_fut_scan, output_seq, size));
+
+        futhark_old_free_i32_1d(old_ctx, input_old_fut_scan_fut);
+        futhark_old_free_i32_1d(old_ctx, output_old_fut_scan_fut);
 
         total_roofline += run_threads(roofline_worker, input, output_roofline, size);
 
@@ -330,17 +350,23 @@ int main(int argc, char *argv[])
     double avg_roofline = total_roofline / (ITERATION - 1);
     double avg_roofline_seq = total_roofline_seq / (ITERATION - 1);
     double avg_fut_chained_scan = total_fut_chained_scan / (ITERATION - 1);
+    double avg_old_fut_scan = total_old_fut_scan / (ITERATION - 1);
 
-    printf("%f %f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq, avg_fut_chained_scan);
+    printf("%f %f %f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq, avg_fut_chained_scan, avg_old_fut_scan);
 
     free(output_paralell);
     free(output_seq);
     free(output_roofline);
     free(output_roofline_seq);
     free(output_fut_chained_scan);
-    
+    free(output_old_fut_scan);
+    free(input);
+
     futhark_context_free(ctx);
     futhark_context_config_free(cfg);
+
+    futhark_old_context_free(old_ctx);
+    futhark_old_context_config_free(old_cfg);
 
     return 0;
 }
