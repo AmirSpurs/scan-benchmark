@@ -3,3 +3,5 @@
 *.exe
 results.csv
 *.s
+.vscode/
+.idea/

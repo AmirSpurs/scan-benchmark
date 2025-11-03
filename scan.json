@@ -1,0 +1,40 @@
+{
+    "backend": "multicore",
+    "entry_points": {
+        "main": {
+            "cfun": "futhark_entry_main",
+            "inputs": [
+                {
+                    "name": "arr",
+                    "type": "[]i32",
+                    "unique": false
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "[]i32",
+                    "unique": false
+                }
+            ],
+            "tuning_params": []
+        }
+    },
+    "types": {
+        "[]i32": {
+            "ctype": "struct futhark_i32_1d *",
+            "elemtype": "i32",
+            "kind": "array",
+            "ops": {
+                "free": "futhark_free_i32_1d",
+                "index": "futhark_index_i32_1d",
+                "new": "futhark_new_i32_1d",
+                "new_raw": "futhark_new_raw_i32_1d",
+                "shape": "futhark_shape_i32_1d",
+                "values": "futhark_values_i32_1d",
+                "values_raw": "futhark_values_raw_i32_1d"
+            },
+            "rank": 1
+        }
+    },
+    "version": "0.26.0 (prerelease - include info below when reporting bugs).\ngit: playground @ db6d7dd (Mon Nov 3 19:19:49 2025 +0100) [modified]\nCompiled with GHC 9.6.7.\n"
+}

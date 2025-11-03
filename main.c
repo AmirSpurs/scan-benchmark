@@ -7,9 +7,11 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <string.h>
+#include "scan.h"
+#include "scan_old_futhark.h"
 
 #define BLOCK_SIZE (1024 * 16)
-#define THREAD_NUMBER 8
+#define THREAD_NUMBER 11
 
 #define SIGN_CHANCE 25
 #define MAX_VALUE 10000
@@ -22,6 +24,14 @@ typedef struct
     int aggregate;
     int prefix;
 } Descriptor;
+
+// typedef struct
+// {
+//     atomic_int flag;
+//     int aggregate;
+//     int prefix;
+//     char padding[64 - sizeof(atomic_int) - 2 * sizeof(int)];
+// } Descriptor __attribute__((aligned(64)));
 
 typedef struct
 {
@@ -113,12 +123,13 @@ void *scan_worker(void *arg)
                 else if (flag == 1)
                 {
                     prefix = prefix + data->descriptors[lb].aggregate;
+                 
                     lb = lb - 1;
                 }
-                else
-                {
-                    // sched_yield();
-                }
+                // else {
+                //     sched_yield();
+                // }
+
             }
             data->descriptors[block_idx].prefix = aggregate + prefix;
             atomic_store_explicit(&data->descriptors[block_idx].flag, 2, memory_order_release);
@@ -234,11 +245,13 @@ int main(int argc, char *argv[])
     double total_seq = 0.0;
     double total_roofline = 0.0;
     double total_roofline_seq = 0.0;
+    double total_fut_chained_scan = 0.0;
 
     int *output_paralell = (int *)malloc(size * sizeof(int));
     int *output_seq = (int *)malloc(size * sizeof(int));
     int *output_roofline = (int *)malloc(size * sizeof(int));
     int *output_roofline_seq = (int *)malloc(size * sizeof(int));
+    int *output_fut_chained_scan = (int *)malloc(size * sizeof(int));
 
     // pre touch
     for (int i = 0; i < size; i++)
@@ -247,21 +260,61 @@ int main(int argc, char *argv[])
         output_seq[i] = 0;
         output_roofline[i] = 0;
         output_roofline_seq[i] = 0;
+        output_fut_chained_scan[i] = 0;
     }
+    
+    struct futhark_context_config *cfg = futhark_context_config_new();
+
+    struct futhark_context *ctx = futhark_context_new(cfg);
+
 
     for (int j = 0; j < ITERATION; j++)
     {
 
-        total_parallel += run_threads(scan_worker, input, output_paralell, size);
+        double tmp = run_threads(scan_worker, input, output_paralell, size);
+        if (j > 0)
+            total_parallel += tmp;
 
         struct timespec start_seq, end_seq;
         clock_gettime(CLOCK_MONOTONIC, &start_seq);
         scan_seq(input, output_seq, size, 0);
         clock_gettime(CLOCK_MONOTONIC, &end_seq);
-        total_seq += (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
+        
+        if (j > 0)
+            total_seq += (end_seq.tv_sec - start_seq.tv_sec) * 1e6 + (end_seq.tv_nsec - start_seq.tv_nsec) / 1e3;
 
         // validation for chained scan
         assert(verify(output_paralell, output_seq, size));
+
+        
+    
+        struct futhark_i32_1d *input_fut_chained_scan_fut = futhark_new_i32_1d(ctx, input, size);
+
+        struct futhark_i32_1d *output_fut_chained_scan_fut ;
+        
+        struct timespec start_fut_chained_scan, end_fut_chained_scan;
+        
+        
+        clock_gettime(CLOCK_MONOTONIC, &start_fut_chained_scan);
+        futhark_entry_main(ctx, &output_fut_chained_scan_fut, input_fut_chained_scan_fut);
+        clock_gettime(CLOCK_MONOTONIC, &end_fut_chained_scan);
+
+        futhark_context_sync(ctx);
+        
+        if (j > 0)
+            total_fut_chained_scan += (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3;
+        
+        // printf("Futhark chained scan done\n");
+        // printf("%f\n", (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3);
+       
+        futhark_values_i32_1d(ctx, output_fut_chained_scan_fut, output_fut_chained_scan);
+        assert(verify(output_fut_chained_scan, output_seq, size));
+        
+        
+        futhark_free_i32_1d(ctx, input_fut_chained_scan_fut);
+        futhark_free_i32_1d(ctx, output_fut_chained_scan_fut);
+
+
 
         total_roofline += run_threads(roofline_worker, input, output_roofline, size);
 
@@ -272,17 +325,22 @@ int main(int argc, char *argv[])
         total_roofline_seq += (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6 + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
         assert(verify(output_roofline_seq, output_roofline, size));
     }
-    double avg_seq = total_seq / ITERATION;
-    double avg_parallel = total_parallel / ITERATION;
-    double avg_roofline = total_roofline / ITERATION;
-    double avg_roofline_seq = total_roofline_seq / ITERATION;
+    double avg_seq = total_seq / (ITERATION - 1);
+    double avg_parallel = total_parallel / (ITERATION - 1);
+    double avg_roofline = total_roofline / (ITERATION - 1);
+    double avg_roofline_seq = total_roofline_seq / (ITERATION - 1);
+    double avg_fut_chained_scan = total_fut_chained_scan / (ITERATION - 1);
 
-    printf("%f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq);
+    printf("%f %f %f %f %f\n", avg_parallel, avg_seq, avg_roofline, avg_roofline_seq, avg_fut_chained_scan);
 
     free(output_paralell);
     free(output_seq);
     free(output_roofline);
     free(output_roofline_seq);
+    free(output_fut_chained_scan);
+    
+    futhark_context_free(ctx);
+    futhark_context_config_free(cfg);
 
     return 0;
 }
