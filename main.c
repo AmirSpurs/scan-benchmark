@@ -25,14 +25,6 @@ typedef struct
     int prefix;
 } Descriptor;
 
-// typedef struct
-// {
-//     atomic_int flag;
-//     int aggregate;
-//     int prefix;
-//     char padding[64 - sizeof(atomic_int) - 2 * sizeof(int)];
-// } Descriptor __attribute__((aligned(64)));
-
 typedef struct
 {
     int *input;
