@@ -11,7 +11,7 @@
 #include "scan_old_futhark.h"
 
 #define BLOCK_SIZE (1024 * 16)
-#define THREAD_NUMBER 11
+#define THREAD_NUMBER 8
 
 #define SIGN_CHANCE 25
 #define MAX_VALUE 10000
@@ -319,8 +319,6 @@ int main(int argc, char *argv[])
         if (j > 0)
             total_old_fut_scan += (end_old_fut_scan.tv_sec - start_old_fut_scan.tv_sec) * 1e6 + (end_old_fut_scan.tv_nsec - start_old_fut_scan.tv_nsec) / 1e3;
 
-        // printf("Futhark chained scan done\n");
-        // printf("%f\n", (end_fut_chained_scan.tv_sec - start_fut_chained_scan.tv_sec) * 1e6 + (end_fut_chained_scan.tv_nsec - start_fut_chained_scan.tv_nsec) / 1e3);
 
         futhark_old_values_i32_1d(old_ctx, output_old_fut_scan_fut, output_old_fut_scan);
         assert(verify(output_old_fut_scan, output_seq, size));
@@ -328,13 +326,18 @@ int main(int argc, char *argv[])
         futhark_old_free_i32_1d(old_ctx, input_old_fut_scan_fut);
         futhark_old_free_i32_1d(old_ctx, output_old_fut_scan_fut);
 
-        total_roofline += run_threads(roofline_worker, input, output_roofline, size);
+
+        tmp = run_threads(roofline_worker, input, output_roofline, size);
+        if (j > 0)
+            total_roofline += tmp;
 
         struct timespec start_roofline_seq, end_roofline_seq;
         clock_gettime(CLOCK_MONOTONIC, &start_roofline_seq);
         memcpy(output_roofline_seq, input, size * sizeof(int));
         clock_gettime(CLOCK_MONOTONIC, &end_roofline_seq);
-        total_roofline_seq += (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6 + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
+        if (j > 0)
+            total_roofline_seq += (end_roofline_seq.tv_sec - start_roofline_seq.tv_sec) * 1e6 + (end_roofline_seq.tv_nsec - start_roofline_seq.tv_nsec) / 1e3;
+        
         assert(verify(output_roofline_seq, output_roofline, size));
     }
     double avg_seq = total_seq / (ITERATION - 1);
