@@ -6,3 +6,9 @@ results.csv
 .vscode/
 .idea/
 *.xlsx
+fut_bench_result.csv
+fut_bench_scan 
+fut_bench_scan.c
+fut_bench_scan.fut
+data/
+.env

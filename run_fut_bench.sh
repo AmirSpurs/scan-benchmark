@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 
-FUTHARK_CHAINED=${1:-"/Users/amir/Desktop/specialCourse/futhark/dist-newstyle/build/aarch64-osx/ghc-9.6.7/futhark-0.26.0/x/futhark/build/futhark/futhark"}
-FUTHARK_OLD=${2:-"/Users/amir/Desktop/old_futhark/futhark/dist-newstyle/build/aarch64-osx/ghc-9.6.7/futhark-0.26.0/x/futhark/build/futhark/futhark"}
-RUNS=${RUNS:-500}
+# Load compiler paths from .env if it exists
+# need to set FUTHARK_CHAINED and FUTHARK_OLD 
+
+if [ -f .env ]; then
+    source .env
+fi
+
+outfile="fut_bench_result.csv"
+RUNS=500
 
 PROG="fut_bench_scan.fut"
 
@@ -40,12 +46,21 @@ entry main (arr: []i32): []i32 =
 -- random input { [50000000]i32 } auto output
 EOF
 
+echo "Using the following Futhark compilers:"
+
 echo "FUTHARK_CHAINED: $FUTHARK_CHAINED"
 echo "FUTHARK_OLD: $FUTHARK_OLD"
 
 echo "=== Chained Scan ==="
-"$FUTHARK_CHAINED" bench "$PROG" --backend=multicore --runs="$RUNS"
+chained_out=$("$FUTHARK_CHAINED" bench "$PROG" --backend=multicore --runs="$RUNS" | tee /dev/tty)
 
-echo
 echo "=== Old Scan ==="
-"$FUTHARK_OLD" bench "$PROG" --backend=multicore --runs="$RUNS" 
+old_out=$("$FUTHARK_OLD" bench "$PROG" --backend=multicore --runs="$RUNS" | tee /dev/tty)
+
+{
+  echo "size,fut_chained_scan,old_fut_scan"
+  paste -d, \
+    <(echo "$chained_out" | awk '/i32:/{print $1}') \
+    <(echo "$chained_out" | awk '/i32:/{print $2}') \
+    <(echo "$old_out"     | awk '/i32:/{print $2}')
+} > "$outfile"
